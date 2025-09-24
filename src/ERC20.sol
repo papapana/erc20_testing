@@ -12,11 +12,7 @@ contract ERC20 {
     mapping(address => mapping(address => uint256)) public allowance;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 value
-    );
+    event Approval(address indexed owner, address indexed spender, uint256 value);
 
     constructor(string memory _name, string memory _symbol, uint8 _decimals) {
         name = _name;
@@ -25,12 +21,14 @@ contract ERC20 {
     }
 
     function approve(address spender, uint256 value) public returns (bool) {
+        require(spender != address(0), "spender cannot be address 0");
         allowance[msg.sender][spender] = value;
         emit Approval(msg.sender, spender, value);
         return true;
     }
 
     function transfer(address to, uint256 value) public returns (bool) {
+        require(to != address(0), "cannot send to address 0");
         require(balanceOf[msg.sender] >= value, "insufficient balance");
         balanceOf[msg.sender] -= value;
         unchecked {
@@ -40,11 +38,9 @@ contract ERC20 {
         return true;
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 value
-    ) public returns (bool) {
+    function transferFrom(address from, address to, uint256 value) public returns (bool) {
+        require(from != address(0), "from cannot be address 0");
+        require(to != address(0), "to cannot be address 0");
         require(balanceOf[from] >= value, "insufficient balance");
         require(allowance[from][msg.sender] >= value, "insufficient allowance");
         if (allowance[from][msg.sender] != type(uint256).max) {
@@ -59,6 +55,7 @@ contract ERC20 {
     }
 
     function _mint(address to, uint256 value) internal virtual {
+        require(to != address(0), "cannot mint to address 0");
         totalSupply += value;
         unchecked {
             balanceOf[to] += value;
@@ -67,6 +64,7 @@ contract ERC20 {
     }
 
     function _burn(address from, uint256 value) internal virtual {
+        require(from != address(0), "cannot burn from address 0");
         balanceOf[from] -= value;
         unchecked {
             totalSupply -= value;

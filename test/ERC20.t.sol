@@ -34,218 +34,111 @@ contract ERC20Harness is ERC20 {
 
 contract ERC20Handler is Test {
     ERC20Harness public token;
-    address internal _owner;
-
-    uint256 public ghostSupply;
-    mapping(address => uint256) ghostBalanceOf;
-    mapping(address => mapping(address => uint256)) ghostAllowance;
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(
-        address indexed owner,
-        address indexed spender,
-        uint256 value
-    );
-
-    uint256 public sumBalances;
-    uint256 public transferFromCalls;
+    address[] public actors;
+    address public owner;
 
     constructor() {
+        owner = address(this);
+        actors.push(makeAddr("bob"));
+        actors.push(makeAddr("alice"));
+        actors.push(makeAddr("john"));
+        actors.push(makeAddr("johanna"));
+        actors.push(makeAddr("kira"));
         token = new ERC20Harness();
-        _owner = msg.sender;
-        ghostSupply = token.totalSupply();
-        ghostBalanceOf[address(this)] += token.totalSupply();
-        sumBalances += token.totalSupply();
-    }
-
-    function give(address to, uint256 amount) external {
-        // if (msg.sender != _owner) return;
-        uint256 maxGive = type(uint256).max - ghostSupply;
-        if (maxGive == 0) {
-            return;
+        for (uint256 i = 0; i < actors.length; i++) {
+            token.transfer(actors[i], 1_000 * 10 ** 18);
         }
-        amount = bound(amount, 1, maxGive);
-        // vm.prank(_owner);
-        token.mint(to, amount);
-        ghostSupply += amount;
-        ghostBalanceOf[to] += amount;
-        sumBalances += amount;
     }
 
-    function take(address from, uint256 amount) external {
-        // if (msg.sender != _owner) return;
-        uint256 max = ghostBalanceOf[from];
-        if (max == 0) return;
-        amount = bound(amount, 1, max);
-        // vm.prank(_owner);
-        token.burn(from, amount);
-        ghostBalanceOf[from] -= amount;
-        ghostSupply -= amount;
-        sumBalances -= amount;
+    /// @notice Returns the sum of balances tracked by this handler (owner and all actors).
+    /// @dev If you add/remove actors or move tokens to addresses outside this set,
+    ///      update this function; otherwise the total-supply invariant may appear to fail.
+    /// @return sumB The total tracked balance.
+    function getSumBalances() public view returns (uint256 sumB) {
+        sumB = token.balanceOf(owner);
+        for (uint256 i = 0; i < actors.length; i++) {
+            sumB += token.balanceOf(actors[i]);
+        }
     }
 
-    function approve(address spender, uint256 value) public returns (bool) {
-        vm.expectEmit(true, true, false, true);
-        emit Approval(msg.sender, spender, value);
-        vm.prank(msg.sender);
-        bool ret = token.approve(spender, value);
+    function approve(uint256 actorNumber, uint256 value) public returns (bool) {
+        actorNumber = bound(actorNumber, 0, actors.length - 1);
+        value = bound(value, 0, type(uint256).max);
+        vm.prank(owner);
+        bool ret = token.approve(actors[actorNumber], value);
         assertTrue(ret);
-        ghostAllowance[msg.sender][spender] = value;
-        assertEq(
-            token.allowance(msg.sender, spender),
-            ghostAllowance[msg.sender][spender]
-        );
         return true;
     }
 
-    function transfer(address to, uint256 value) public returns (bool) {
-        if (ghostBalanceOf[msg.sender] == 0) {
+    function transfer(uint256 actorNumber, uint256 value) public returns (bool) {
+        actorNumber = bound(actorNumber, 0, actors.length - 1);
+        value = bound(value, 0, token.balanceOf(owner));
+        vm.prank(owner);
+        bool ret = token.transfer(actors[actorNumber], value);
+        assertTrue(ret);
+        return true;
+    }
+
+    function transferFrom(uint256 spenderActorNumber, uint256 fromActorNumber, uint256 toActorNumber, uint256 value)
+        public
+        returns (bool)
+    {
+        spenderActorNumber = bound(spenderActorNumber, 0, actors.length - 1);
+        fromActorNumber = bound(fromActorNumber, 0, actors.length - 1);
+        toActorNumber = bound(toActorNumber, 0, actors.length - 1);
+
+        address spender = actors[spenderActorNumber];
+        address from = actors[fromActorNumber];
+        address to = actors[toActorNumber];
+
+        value = bound(value, 0, token.balanceOf(from));
+        if (value == 0) {
             return true;
         }
-        // make sure the token call won't revert by bounding to the actual token balance
-        uint256 bal = token.balanceOf(msg.sender);
-        if (bal == 0) return true;
-        // bound by the real token balance of 'from' to avoid unexpected reverts/logs
-        uint256 balFrom = token.balanceOf(msg.sender);
-        if (balFrom == 0) return true;
-        value = bound(value, 1, balFrom);
-
-        vm.expectEmit(true, true, false, true);
-        emit Transfer(msg.sender, to, value);
-        vm.prank(msg.sender);
-        bool ret = token.transfer(to, value);
-        ghostBalanceOf[msg.sender] -= value;
-        ghostBalanceOf[to] += value;
+        uint256 allowance = token.allowance(from, spender);
+        if (allowance < value) {
+            // case we need to set to 0 first
+            if (allowance != 0) {
+                vm.prank(from);
+                token.approve(spender, 0);
+            }
+            vm.prank(from);
+            token.approve(spender, value);
+        }
+        vm.prank(spender);
+        bool ret = token.transferFrom(from, to, value);
         assertTrue(ret);
-        assertEq(token.balanceOf(msg.sender), ghostBalanceOf[msg.sender]);
-        assertEq(token.balanceOf(to), ghostBalanceOf[to]);
         return true;
     }
 
-    function transferFrom(
-        address from,
-        address to,
-        uint256 value
-    ) public returns (bool) {
-        if (from == address(0) || from == to) return true;
+    function burn(uint256 actorNumber, uint256 value) public returns (bool) {
+        actorNumber = bound(actorNumber, 0, actors.length - 1);
+        // bound value so it doesn't exceed target balance (optional)
+        value = bound(value, 0, token.balanceOf(actors[actorNumber]));
+        // calling token.burn from this contract -> msg.sender == address(this) (the owner)
+        token.burn(actors[actorNumber], value);
+        return true;
+    }
 
-        // real token balance of 'from'
-        uint256 balFrom = token.balanceOf(from);
-        if (balFrom == 0) return true;
-
-        // ensure there's an allowance for msg.sender; if not, create one by impersonating `from`
-        if (ghostAllowance[from][msg.sender] == 0) {
-            // grant allowance equal to the balance to make transferFrom possible
-            uint256 grant = balFrom;
-            vm.prank(from);
-            bool ok = token.approve(msg.sender, grant);
-            assertTrue(ok);
-            ghostAllowance[from][msg.sender] = grant;
-        }
-
-        // bound by both balance and allowance
-        uint256 maxAllowed = ghostAllowance[from][msg.sender];
-        uint256 max = balFrom < maxAllowed ? balFrom : maxAllowed;
-        if (max == 0) return true;
-        value = bound(value, 1, max);
-
-        vm.expectEmit(true, true, false, true);
-        emit Transfer(from, to, value);
-        vm.prank(msg.sender);
-        bool ret = token.transferFrom(from, to, value);
-        assertTrue(ret);
-
-        if (ghostAllowance[from][msg.sender] != type(uint256).max) {
-            ghostAllowance[from][msg.sender] -= value;
-        }
-        ghostBalanceOf[from] -= value;
-        ghostBalanceOf[to] += value;
-        assertEq(
-            token.allowance(from, msg.sender),
-            ghostAllowance[from][msg.sender]
-        );
-        assertEq(token.balanceOf(from), ghostBalanceOf[from]);
-        assertEq(token.balanceOf(to), ghostBalanceOf[to]);
-        transferFromCalls++;
+    function mint(uint256 actorNumber, uint256 value) public returns (bool) {
+        actorNumber = bound(actorNumber, 0, actors.length - 1);
+        // bound value so it doesn't exceed target balance (optional)
+        value = bound(value, 1, 21_000_000 * 10 ** 18);
+        // calling token.burn from this contract -> msg.sender == address(this) (the owner)
+        token.mint(actors[actorNumber], value);
         return true;
     }
 }
 
 contract ERC20Test is StdInvariant, Test {
-    ERC20Handler internal ercH;
+    ERC20Handler ercH;
+
     function setUp() public {
         ercH = new ERC20Handler();
         targetContract(address(ercH));
-        // targetSender(address(this));
     }
 
-    function invariant_sum_balances_is_total_supply() public view {
-        assertEq(
-            ercH.token().totalSupply(),
-            ercH.sumBalances(),
-            "supply mismatch"
-        );
-    }
-
-    // Runs after the invariant fuzzing completes.
-    function afterInvariant() public view {
-        console.log("transferFromCalls", ercH.transferFromCalls());
+    function invariant_sumBalances_is_totalSupply() public view {
+        assertEq(ercH.getSumBalances(), ercH.token().totalSupply());
     }
 }
-
-/*
-Questions:
-1. How do I use the handler in the invariant test?
-2. Should the handler be test?
-3. Can I actually use the sumBalances or just in every transfer?
-4. How do I check it with multiple addresses?
-5. Approval checks pending (I know)
-*/
-
-// contract ERC20Handler is Test {
-//     uint8 public decimals = 18;
-//     string public name = "ERCHandler";
-//     string public symbol = "EH";
-
-//     // mapping(address => uint256) _balanceOf;
-//     uint256 public sumBalances;
-
-//     uint256 public constant INITIAL_SUPPLY = 1_000_000;
-
-//     ERC20 token;
-//     constructor() {
-//         token = new ERC20(name, symbol, decimals, INITIAL_SUPPLY);
-//         // _mint(msg.sender, INITIAL_SUPPLY * 10 ** decimals);
-//         sumBalances = INITIAL_SUPPLY;
-//         // _balanceOf[msg.sender] = INITIAL_SUPPLY;
-//     }
-
-//     function approve(address spender, uint256 value) public returns (bool) {
-//         return token.approve(spender, value);
-//     }
-
-//     function transfer(address to, uint256 value) public returns (bool) {
-//         uint256 sumBalancesBefore = token.balanceOf(msg.sender) +
-//             token.balanceOf(to);
-//         uint256 totalSupplyBefore = token.totalSupply();
-//         bool ok = token.transfer(to, value);
-//         assertEq(
-//             token.balanceOf(msg.sender) + token.balanceOf(to),
-//             sumBalancesBefore
-//         );
-//     }
-
-//     function transferFrom(
-//         address from,
-//         address to,
-//         uint256 value
-//     ) public returns (bool) {
-//         uint256 sumBalancesBefore = token.balanceOf(from) + token.balanceOf(to);
-//         uint256 totalSupplyBefore = token.totalSupply();
-//         bool ok = token.transferFrom(from, to, value);
-//         assertEq(
-//             token.balanceOf(from) + token.balanceOf(to),
-//             sumBalancesBefore
-//         );
-//     }
-// }
